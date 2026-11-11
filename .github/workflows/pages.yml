@@ -1,0 +1,46 @@
+name: Publish update repository
+
+# Publishes the updates/ folder to GitHub Pages. With the custom domain set in
+# Settings > Pages, PixInsight users add https://pixinsight.fmsoftware.dev/
+# as the repository address. updates.xri is then served at the site root.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "updates/**"
+      - "tools/check_update.py"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # A wrong checksum or file name breaks installation for every user,
+      # so stop before publishing if updates.xri and the package disagree.
+      - name: Check updates.xri against the package
+        run: python3 tools/check_update.py
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: updates
+
+      - id: deployment
+        uses: actions/deploy-pages@v5

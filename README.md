@@ -24,7 +24,7 @@ All frames must be **raw**: straight from the camera, not calibrated, not debaye
 2. Click **Add** and paste this address, including the final slash:
 
    ```
-   https://raw.githubusercontent.com/grebleem/SubExposureCalculator/main/updates/
+   https://pixinsight.fmsoftware.dev/
    ```
 
 3. Choose **RESOURCES > Updates > Check for Updates** and apply the update.
@@ -89,7 +89,9 @@ There is no single optimum. Total integration time matters far more than sub len
 
 ## For maintainers
 
-After changing the script, raise `SEC_VERSION`, run `python3 tools/build_update.py`, and commit `src/` together with the regenerated `updates/` folder.
+After changing the script, raise `SEC_VERSION`, run `python3 tools/build_update.py`, then `python3 tools/check_update.py`, and commit `src/` together with the regenerated `updates/` folder.
+
+Pushing to `main` publishes `updates/` to https://pixinsight.fmsoftware.dev/ through GitHub Pages ([`.github/workflows/pages.yml`](.github/workflows/pages.yml)). The domain is set once in the repository's **Settings > Pages**, with Source set to *GitHub Actions*.
 
 ## Credits
 
