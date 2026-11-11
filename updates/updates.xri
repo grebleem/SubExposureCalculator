@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xri version="1.0">
+   <description>
+      <p>
+         SubExposureCalculator by Bastiaan Meelberg: sky-limited sub-exposure times
+         from your own raw frames. https://github.com/grebleem/SubExposureCalculator
+      </p>
+   </description>
+   <platform os="all" arch="noarch" version="1.8.8:9.9.9">
+      <package fileName="SubExposureCalculator-1.0.1-20261111.zip" sha1="6333af2c4b6166a87f72c496385752ff32422509" type="script" releaseDate="20261111">
+         <title>
+            SubExposureCalculator script version 1.0.1
+         </title>
+         <remove>
+            src/scripts/SubExposureCalculator/SubExposureCalculator.js
+         </remove>
+         <description>
+            <p>
+               Measures read noise, conversion gain and sky background from raw bias,
+               flat and light frames, and calculates the sub-exposure time needed to
+               make read noise insignificant. Works for mono and one-shot-colour cameras.
+            </p>
+            <p>
+               After installation the script is available at
+               SCRIPT &gt; Utilities &gt; SubExposureCalculator.
+            </p>
+            <p>
+               Copyright (c) 2026 Bastiaan Meelberg. Released under the MIT License.
+            </p>
+         </description>
+      </package>
+   </platform>
+</xri>
