@@ -9,9 +9,10 @@
  *    (select, export, delete, import), Calculate, and a preview as
  *    background. That catches JavaScript mistakes
  *    (undefined names, wrong variables), but NOT wrong PixInsight API names.
- * 2. It draws the graph through a recorder that implements only the drawing
- *    calls the script is meant to use, and fails on any other. The drawing is
- *    written out as SVG files so the layout can be looked at in a browser.
+ * 2. It draws the graph and the background map through a recorder that
+ *    implements only the drawing calls the script is meant to use, and fails
+ *    on any other. The drawings are written out as SVG files so the layout
+ *    can be looked at in a browser.
  *    Text widths are approximated, so spacing differs a little in PixInsight.
  *
  * Run:  node tests/test_ui.js [output folder for the SVG files]
@@ -497,6 +498,14 @@ try
            "Calculate uses the preview's rectangle and the results name it" );
    expect( /background region is small \(60 x 56 pixels\)/.test( second.results.warnings.join( " " ) ),
            "a small region is used, with a warning" );
+   expect( !/odd number of bias/.test( second.results.warnings.join( " " ) ) &&
+           /odd number of bias/.test( second.results.cameraNotes.join( " " ) ),
+           "notes from when the camera was measured are kept apart from the warnings of a calculation" );
+   var longName = "Light_IC 1805 Heart_300.0s_Bin1_HaO3_gain100_20261104-200851_-10.0C_0005.fit";
+   var shortName = script.secShortName( longName, 36 );
+   expect( shortName.length == 36 && /^Light_IC 1805 Hear/.test( shortName ) && /_0005\.fit$/.test( shortName ) &&
+           script.secShortName( "short.fit", 36 ) == "short.fit",
+           "a long frame name is shortened in the middle for the table: " + shortName );
    var regionResults = second.results;
    second.bgView.currentView = fakePreview( 20, 24, 60, 56, 200 );
    second.calculate();
@@ -505,6 +514,23 @@ try
    var csvHead = script.secCsvReport( regionResults ).split( "\n" );
    expect( /,background_from$/.test( csvHead[0] ) && /your region lightA->Preview01/.test( csvHead[1] ),
            "the CSV records where the background came from" );
+
+   // ---- the map window ----
+   var map = new script.SecMapDialog( result );
+   map.frame.onItemSelected( 1 );
+   map.channel.onItemSelected( 2 );
+   expect( map.model.frameName == "lightB" && map.model.channelName == "B" && map.model.mode == "tiles" &&
+           /20th percentile/.test( String( map.note.text ) ),
+           "the map window follows the frame and channel that are chosen" );
+   map.plot.width = 760;
+   map.plot.height = 420;
+   map.plot.font = fakeFont;
+   map.plot.displayPixelRatio = 1;
+   map.plot.onPaint();
+   var regionMap = new script.SecMapDialog( regionResults );
+   expect( regionMap.model.mode == "region" && regionMap.model.region.x0 == 20 &&
+           /Your own region, outlined/.test( String( regionMap.note.text ) ),
+           "with a preview as background, the map shows that region" );
 
    // ---- the graph window ----
    var graph = new script.SecGraphDialog( result );
@@ -587,6 +613,98 @@ for ( var i = 0; i < cases.length; ++i )
    {
       problems.push( c.file + " threw: " + (e.stack || e) );
    }
+}
+
+// ----------------------------------------------------------------------------
+// 3. The map, drawn for a frame that is large enough for the full 16 x 11 grid:
+//    sky that falls off towards the corners, with a bright patch in the middle.
+// ----------------------------------------------------------------------------
+
+function bigFrame( name, w, h, level, noise, keywords, seed )
+{
+   var data = new Uint16Array( w*h ), a = seed;
+   function uniform() { a = (a*1664525 + 1013904223) >>> 0; return (a + 0.5)/4294967296; }
+   for ( var y = 0; y < h; ++y )
+      for ( var x = 0; x < w; ++x )
+      {
+         var g = Math.sqrt( -2*Math.log( uniform() ) )*Math.cos( 2*Math.PI*uniform() );
+         data[y*w + x] = Math.max( 0, Math.round( level( x, y ) + noise*g ) );
+      }
+   var kw = { BAYERPAT: "RGGB" };
+   for ( var k in keywords )
+      kw[k] = String( keywords[k] );
+   return { name: name, path: name, width: w, height: h, data: data, keywords: kw };
+}
+
+try
+{
+   var BW = 2048, BH = 1408;
+   var big = {
+      bigBias1: bigFrame( "bigBias1", BW, BH, function() { return 500; }, 6, {}, 31 ),
+      bigBias2: bigFrame( "bigBias2", BW, BH, function() { return 500; }, 6, {}, 32 ),
+      bigLight: bigFrame( "bigLight", BW, BH, function( x, y )
+      {
+         var rx = (x - BW/2)/(BW/2), ry = (y - BH/2)/(BH/2);
+         var blob = 70*Math.exp( -((x - 0.45*BW)*(x - 0.45*BW) + (y - 0.5*BH)*(y - 0.5*BH))/(2*260*260) );
+         return 500 + 34*(1 - 0.3*(rx*rx + ry*ry)/2) + blob;
+      }, 8, { EXPTIME: 300, FILTER: "HaO3" }, 33 )
+   };
+   var bigLoader = function( name )
+   {
+      var f = big[name];
+      return { name: f.name, path: f.path, width: f.width, height: f.height,
+               data: new Uint16Array( f.data ), keywords: f.keywords };
+   };
+   var bigCamera = script.secMeasureCamera( { bias1: "bigBias1", bias2: "bigBias2", gainMode: "manual",
+                                              manualGain: 0.25, sensor: "auto", loader: bigLoader }, null );
+   var mapCases = [
+      { file: "map_tiles", mode: "tiles", size: [900, 480], scale: 1, channel: 0 },
+      { file: "map_region", mode: "region", size: [900, 480], scale: 1, channel: 0,
+        region: { x0: 1700, y0: 980, x1: 1840, y1: 1180, source: "bigLight->Preview01" } },
+      { file: "map_frame_median", mode: "frame", size: [900, 480], scale: 1, channel: 1 },
+      { file: "map_whole_numbers", mode: "tiles", size: [640, 400], scale: 1, channel: 0 },
+      { file: "map_hidpi", mode: "tiles", size: [1800, 960], scale: 2, channel: 2 },
+      { file: "map_narrow_no_panel", mode: "tiles", size: [300, 260], scale: 1, channel: 0 },
+      { file: "map_too_small", mode: "tiles", size: [90, 60], scale: 1, channel: 0 }
+   ];
+   for ( var mi = 0; mi < mapCases.length; ++mi )
+   {
+      var mc = mapCases[mi], beforeMap = problems.length;
+      var mr = script.secCompute( { camera: bigCamera, lights: ["bigLight"], bgMode: mc.mode, bgRegion: mc.region || null,
+                                    targets: [3, 5, 10], fallbackExposure: NaN, siteLat: NaN, siteLon: NaN,
+                                    loader: bigLoader }, null );
+      var mm = script.secMapModel( mr, 0, mc.channel );
+      var mfont = (mc.scale == 1) ? fakeFont :
+         { width: function( t ) { return 2*fakeFont.width( t ); }, ascent: 22, descent: 6 };
+      var mrec = new Recorder( mc.size[0], mc.size[1] );
+      script.secPaintMap( mrec.graphics, mc.size[0], mc.size[1], mfont, mc.scale, mm );
+      var msvg = mrec.svg();
+      if ( mc.scale != 1 )
+         msvg = msvg.replace( "font-size=\"12\"", "font-size=\"24\"" );
+      fs.writeFileSync( path.join( outDir, mc.file + ".svg" ), msvg );
+      // the tiles that set the reading must really bracket it
+      var bracket = true;
+      if ( mc.mode == "tiles" )
+      {
+         var lo = Infinity, hi = -Infinity;
+         for ( var sb2 = 0; sb2 < mm.setBy.length; ++sb2 )
+         {
+            lo = Math.min( lo, mm.values[mm.setBy[sb2]] );
+            hi = Math.max( hi, mm.values[mm.setBy[sb2]] );
+         }
+         bracket = mm.setBy.length > 0 && mm.used >= lo - 1e-6 && mm.used <= hi + 1e-6;
+         if ( !bracket )
+            problems.push( mc.file + ": the outlined tiles (" + lo + " to " + hi + ") do not bracket the reading " + mm.used );
+      }
+      console.log( (problems.length == beforeMap ? "ok   " : "FAIL ") + mc.file + ": " + mm.nx + " x " + mm.ny + " tiles, " +
+         mrec.calls() + " drawing calls, channel " + mm.channelName + ", used " + mm.used.toFixed( 1 ) +
+         " ADU, tiles would read " + mm.tilesWouldRead.toFixed( 1 ) + ", tiles " + mm.lowest.toFixed( 1 ) + " to " +
+         mm.highest.toFixed( 1 ) + (mc.mode == "tiles" ? ", set by tile(s) " + mm.setBy.join( " and " ) : "") );
+   }
+}
+catch ( e )
+{
+   problems.push( "map code threw: " + (e.stack || e) );
 }
 
 console.log( "SVG files written to " + outDir );

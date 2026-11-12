@@ -140,6 +140,8 @@ Two methods are offered.
 - **Whole frame median.** Simple, and fine for sparse fields.
 - **Preview (your own region).** You draw a preview on an open raw light frame, on a patch of sky you judge to be empty, and choose it in the script. The median of that rectangle, per channel, is the background. The same rectangle is used in every light frame in the list, so the frames should share the same framing; dithering by a few pixels does not matter. The median ignores a few faint stars, but keep bright stars out and make the rectangle at least 100 × 100 pixels, or the result gets noisy. The script warns below that size. Stay away from the corners and edges: a raw frame is darker there because of vignetting, so a patch near the edge reads a lower sky than the middle of the frame really has. The same vignetting pulls the *Darkest tiles* estimate a little towards the edges too.
 
+The **Map** window shows what these methods work with. It draws a light frame cut into the same tiles, each with its median in ADU above the bias level, shaded from the darkest tile to the brightest by rank, so one very bright tile cannot flatten the rest. With *Darkest tiles* the tile or the two tiles between which the 20th percentile fell are outlined. With *Preview* your rectangle is drawn at its place in the frame, and the value the tiles would have given is shown next to yours. The map makes three things visible that a single number hides: where the nebula lies, how much the frame darkens towards its corners, and whether the patch behind the reading is the kind of sky you had in mind.
+
 Then
 
 ```

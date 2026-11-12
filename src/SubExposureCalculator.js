@@ -116,6 +116,17 @@ function secFmtNice( seconds )
    return String( Math.round( seconds/360 )/10 ) + " h";
 }
 
+// A long file name with its middle left out, so that a table column stays
+// narrow. Both ends are kept, because the frame number is at the end.
+function secShortName( name, max )
+{
+   name = String( name );
+   if ( name.length <= max )
+      return name;
+   var head = Math.ceil( (max - 1)/2 ), tail = max - 1 - head;
+   return name.substring( 0, head ) + "\u2026" + name.substring( name.length - tail );
+}
+
 // Makes a string safe to show in a rich text label.
 function secHtml( s )
 {
@@ -450,7 +461,12 @@ function secDiffHistograms( a, b, w, layout, x0, y0, x1, y1 )
 /*
  * Background estimate that tolerates nebulosity: the frame is cut into a grid
  * of tiles, each tile's median is taken per channel, and the requested
- * percentile of those tile medians is returned.
+ * percentile of those tile medians is the background.
+ *
+ * Returns { values [], nx, ny, medians [][], setBy [] }. values[] is the
+ * background per channel. medians[c][ty*nx + tx] is the median of each tile,
+ * NaN for a tile that was left out. setBy[c] lists the one or two tiles
+ * between which the percentile fell, so they can be shown.
  */
 function secTileBackground( data, w, h, layout, globalMedian, percentile )
 {
@@ -458,9 +474,13 @@ function secTileBackground( data, w, h, layout, globalMedian, percentile )
    var nx = Math.max( 1, Math.min( 16, Math.floor( w/128 ) ) );
    var ny = Math.max( 1, Math.min( 16, Math.floor( h/128 ) ) );
    var nch = layout.nch, map = layout.map;
-   var lo = [], counts = [], below = [], total = [], medians = [];
+   var lo = [], counts = [], below = [], total = [], medians = [], grid = [];
    for ( var c = 0; c < nch; ++c )
    {
+      var empty = [];
+      for ( var e = 0; e < nx*ny; ++e )
+         empty.push( NaN );
+      grid.push( empty );
       lo.push( Math.max( 0, Math.round( globalMedian[c] ) - 768 ) );
       counts.push( new Float64Array( BINS ) );
       below.push( 0 );
@@ -507,7 +527,9 @@ function secTileBackground( data, w, h, layout, globalMedian, percentile )
                var n = counts[c2][b];
                if ( n > 0 && acc + n >= target )
                {
-                  medians[c2].push( lo[c2] + b - 0.5 + (target - acc)/n );
+                  var tileMedian = lo[c2] + b - 0.5 + (target - acc)/n;
+                  medians[c2].push( { m: tileMedian, index: ty*nx + tx } );
+                  grid[c2][ty*nx + tx] = tileMedian;
                   found = true;
                   break;
                }
@@ -518,20 +540,22 @@ function secTileBackground( data, w, h, layout, globalMedian, percentile )
       }
    }
 
-   var out = [];
+   var out = [], setBy = [];
    for ( var c3 = 0; c3 < nch; ++c3 )
    {
-      var m = medians[c3].sort( function( p, q ) { return p - q; } );
+      var m = medians[c3].sort( function( p, q ) { return p.m - q.m; } );
       if ( m.length == 0 )
       {
          out.push( globalMedian[c3] );
+         setBy.push( [] );
          continue;
       }
       var pos = percentile*(m.length - 1);
       var i0 = Math.floor( pos ), i1 = Math.min( m.length - 1, i0 + 1 );
-      out.push( m[i0] + (m[i1] - m[i0])*(pos - i0) );
+      out.push( m[i0].m + (m[i1].m - m[i0].m)*(pos - i0) );
+      setBy.push( (i1 != i0 && pos > i0) ? [m[i0].index, m[i1].index] : [m[i0].index] );
    }
-   return out;
+   return { values: out, nx: nx, ny: ny, medians: grid, setBy: setBy };
 }
 
 // ============================================================================
@@ -1158,6 +1182,9 @@ function secMeasureLights( camera, p, log )
          med.push( hl[c3].median() );
          mad.push( hl[c3].mad() );
       }
+      // The tiles are measured whatever the method, so that the map can show
+      // how the sky lies across the frame.
+      var tiles = secTileBackground( L.data, w, h, layout, med, 0.20 );
       // Background, and the scatter that the noise check compares with the
       // prediction: of the user's region when there is one, else of the frame.
       var bg, scatter = mad;
@@ -1173,7 +1200,7 @@ function secMeasureLights( camera, p, log )
          }
       }
       else
-         bg = (p.bgMode == "tiles") ? secTileBackground( L.data, w, h, layout, med, 0.20 ) : med;
+         bg = (p.bgMode == "tiles") ? tiles.values : med;
 
       var ch = [];
       for ( var c4 = 0; c4 < nch; ++c4 )
@@ -1218,8 +1245,20 @@ function secMeasureLights( camera, p, log )
       var sky = isFinite( ms ) ? secSkyInfo( (ms + 500*exposure)/86400000 + 2440587.5, lat, lon,
          secNum( secKw( L, ["RA"] ) ), secNum( secKw( L, ["DEC"] ) ) ) : null;
 
+      // tile medians in ADU as stored in the file, like every ADU figure in the result
+      var tileMedians = [], tileReading = [];
+      for ( var c7 = 0; c7 < nch; ++c7 )
+      {
+         var scaledTiles = [];
+         for ( var ti = 0; ti < tiles.medians[c7].length; ++ti )
+            scaledTiles.push( tiles.medians[c7][ti]*step );
+         tileMedians.push( scaledTiles );
+         tileReading.push( tiles.values[c7]*step );
+      }
       frames.push( { name: L.name, filter: secKw( L, ["FILTER"] ) || "(none)", exposure: exposure,
-                     dateObs: dateObs, sky: sky, channels: ch } );
+                     dateObs: dateObs, sky: sky, channels: ch,
+                     tiles: { nx: tiles.nx, ny: tiles.ny, medians: tileMedians, reading: tileReading,
+                              setBy: tiles.setBy } } );
       L.data = null;
    }
 
@@ -1277,7 +1316,10 @@ function secCompute( p, log )
    var camera = p.camera || secMeasureCamera( p, log );
    var r = secMeasureLights( camera, p, log );
    r.camera = camera;
-   r.warnings = (camera.warnings || []).concat( r.warnings );
+   // What was noticed when the camera was measured belongs to the camera and
+   // is shown with it. r.warnings are about these light frames only, so a
+   // saved camera does not raise the same warning at every calculation.
+   r.cameraNotes = camera.warnings || [];
    return r;
 }
 
@@ -1494,6 +1536,12 @@ function secConsoleReport( r )
       for ( i = 0; i < r.warnings.length; ++i )
          console.warningln( "Warning: " + r.warnings[i] );
    }
+   if ( r.cameraNotes && r.cameraNotes.length > 0 )
+   {
+      console.writeln( "" );
+      for ( i = 0; i < r.cameraNotes.length; ++i )
+         console.writeln( "Camera note, from when it was measured: " + r.cameraNotes[i].replace( /</g, "" ) );
+   }
    console.flush();
 }
 
@@ -1589,6 +1637,8 @@ var SEC_HELP = [
       "measurements below it and more detail in the Process Console.</li>" +
       "<li>Press <b>Graph</b> to see how efficiency grows with sub length for each channel, and " +
       "where the suggestion sits on that curve.</li>" +
+      "<li>Press <b>Map</b> to see the sky background across each frame, and which part of it " +
+      "was used.</li>" +
       "<li>Press <b>Save CSV</b> to keep the results, for example to build a table of sky " +
       "brightness against Moon phase over several nights.</li></ol>" +
       "<p>For a colour camera no debayering is done. The red, green and blue pixels are simply " +
@@ -1605,7 +1655,8 @@ var SEC_HELP = [
       "over the pairs is taken, so one odd frame or a cosmic ray hit cannot move the result. Flat " +
       "frames are paired with a neighbour through the same filter at the same brightness; frames " +
       "without such a partner are left out. All pairs count towards one gain. The results show " +
-      "how well the pairs agree, and the gain per filter, which should be the same.</p>" +
+      "how well the pairs agree, and the gain per filter, which should be the same. Anything " +
+      "noticed while measuring is shown with the camera when you select it.</p>" +
       "<p><b>Export</b> saves the selected camera as a file, to keep or to use on another " +
       "computer. <b>Import</b> adds one from such a file. <b>Delete</b> removes it from the list; " +
       "your frames are never touched.</p>" +
@@ -1622,7 +1673,12 @@ var SEC_HELP = [
       "from the list beside it. The image it belongs to is added to the light frames.</p>" +
       "<p>The median of that rectangle is used in every light frame in the list, so they should " +
       "share the same framing. The noise check then looks at that rectangle only: a value near " +
-      "1.0 means the patch you chose behaves like plain sky.</p>" },
+      "1.0 means the patch you chose behaves like plain sky.</p>" +
+      "<p><b>Map.</b> After Calculate, the Map button shows a frame cut into its tiles, each with " +
+      "its sky level in ADU above bias and shaded from the darkest tile to the brightest. With " +
+      "<i>Darkest tiles</i> the tile that set the background is outlined; with <i>Preview</i> your " +
+      "rectangle is, next to what the tiles would have read. Use it to see where the nebula is, " +
+      "how much the corners darken, and whether your patch is as empty as you thought.</p>" },
    { title: "6. The theory", html:
       "<p><b>The theory</b></p>" +
       "<p>Call the read noise <i>R</i> (electrons) and the sky background collected in one sub " +
@@ -1683,6 +1739,8 @@ var SEC_HELP = [
       "optimum. It holds for the sky as it was when the frames were taken.</p>" },
    { title: "9. Reading the table", html:
       "<p><b>Reading the table</b></p>" +
+      "<p>One row per light frame and channel. Long file names are shortened in the middle; the " +
+      "Process Console, the CSV and the Map window have them in full.</p>" +
       "<ul><li><b>Sky (ADU), Sky (e-)</b>: background above the bias level in this frame.</li>" +
       "<li><b>Rate</b>: sky electrons per second per pixel. This is the number worth logging " +
       "against Moon phase.</li>" +
@@ -2254,6 +2312,309 @@ function SecGraphDialog( results )
    this.adjustToContents();
 }
 SecGraphDialog.prototype = new Dialog;
+
+// ============================================================================
+// Map: the sky background across one light frame, tile by tile
+// ============================================================================
+
+/*
+ * Everything the map shows for one light frame and one channel, in data
+ * units. values[] is the median of each tile in ADU above the bias level, row
+ * by row from the top left, NaN for a tile that was left out. rank[] runs from
+ * 0 for the darkest tile to 1 for the brightest and sets the shade, so one
+ * very bright tile cannot flatten the rest. No PixInsight calls.
+ */
+function secMapModel( r, frameIndex, channel )
+{
+   var f = r.frames[frameIndex], t = f.tiles, cam = r.camera;
+   var bias = cam.biasLevel[channel];
+   var n = t.nx*t.ny, values = [], rank = [], order = [], i;
+   for ( i = 0; i < n; ++i )
+   {
+      var v = t.medians[channel][i];
+      values.push( isFinite( v ) ? v - bias : NaN );
+      rank.push( NaN );
+      if ( isFinite( v ) )
+         order.push( i );
+   }
+   order.sort( function( a, b ) { return values[a] - values[b]; } );
+   for ( i = 0; i < order.length; ++i )
+      rank[order[i]] = (order.length > 1) ? i/(order.length - 1) : 0;
+   var mode = r.background.mode;
+   return {
+      frameName: f.name, channelName: cam.layout.names[channel], colour: cam.layout.names.length > 1,
+      width: cam.width, height: cam.height, nx: t.nx, ny: t.ny, values: values, rank: rank,
+      lowest: (order.length > 0) ? values[order[0]] : NaN,
+      highest: (order.length > 0) ? values[order[order.length - 1]] : NaN,
+      leftOut: n - order.length, mode: mode,
+      // the tiles that set the reading, when the tiles were the method
+      setBy: (mode == "tiles") ? t.setBy[channel] : [],
+      region: (mode == "region") ? r.background.region : null,
+      used: f.channels[channel].bgADU - bias, tilesWouldRead: t.reading[channel] - bias
+   };
+}
+
+// A shade for a rank between 0 (darkest tile) and 1 (brightest), as 0xAARRGGBB.
+function secMapShade( rank )
+{
+   var stops = [[0x10, 0x16, 0x24], [0x3c, 0x5c, 0x8c], [0xf0, 0xe2, 0xb0]];
+   var x = Math.max( 0, Math.min( 1, rank ) )*2;
+   var k = (x >= 1) ? 1 : 0, u = x - k;
+   var c = [];
+   for ( var i = 0; i < 3; ++i )
+      c.push( Math.round( stops[k][i] + (stops[k + 1][i] - stops[k][i])*u ) );
+   return 0xff000000 + c[0]*65536 + c[1]*256 + c[2];
+}
+
+/*
+ * Draws the map. Same conventions as secPaintPlot: outlines as lines, fills
+ * with an explicit brush, a panel on the right when there is room.
+ */
+function secPaintMap( g, width, height, font, scale, model )
+{
+   var BG = 0xff1b1e24, AXIS = 0xff8d96a5, TEXT = 0xffd5d9e0, DIM = 0xffa3abb8, ACCENT = 0xffffb347,
+       OUT = 0xff4a2a2a, DARKTEXT = 0xff1b1e24;
+   var pad = Math.round( 8*scale );
+   var textH = font.ascent + font.descent;
+   var rowH = textH + Math.round( 4*scale );
+   var i, j, y;
+
+   function adu( v )
+   {
+      return isFinite( v ) ? secFmt( v, (Math.abs( v ) < 100) ? 1 : 0 ) : "n/a";
+   }
+   function text( tx, ty, str, align, color )
+   {
+      tx = Math.round( tx );
+      var tw = font.width( str ), slack = 2*pad;
+      var y0 = Math.round( ty - 0.5*textH ) - 1, y1 = y0 + textH + 2;
+      g.pen = new Pen( color );
+      if ( align == "r" )
+         g.drawTextRect( new Rect( tx - tw - slack, y0, tx, y1 ), str, TextAlign_Right | TextAlign_VertCenter );
+      else if ( align == "c" )
+         g.drawTextRect( new Rect( Math.round( tx - 0.5*tw ) - slack, y0, Math.round( tx + 0.5*tw ) + slack, y1 ),
+            str, TextAlign_HorzCenter | TextAlign_VertCenter );
+      else
+         g.drawTextRect( new Rect( tx, y0, tx + tw + slack, y1 ), str, TextAlign_Left | TextAlign_VertCenter );
+   }
+   function outline( x0, y0, x1, y1, color, thickness )
+   {
+      g.pen = new Pen( color, thickness );
+      g.drawLine( x0, y0, x1, y0 );
+      g.drawLine( x0, y1, x1, y1 );
+      g.drawLine( x0, y0, x0, y1 );
+      g.drawLine( x1, y0, x1, y1 );
+   }
+
+   // ---- what goes in the side panel, and how wide that makes it ------------
+   var facts = [];
+   facts.push( [(model.colour ? "Channel " + model.channelName : "Sky") + ", ADU above bias", ""] );
+   facts.push( ["Background used", adu( model.used )] );
+   if ( model.mode != "tiles" )
+      facts.push( ["Darkest tiles would read", adu( model.tilesWouldRead )] );
+   facts.push( ["Darkest tile", adu( model.lowest )] );
+   facts.push( ["Brightest tile", adu( model.highest )] );
+   var key = [];
+   if ( model.mode == "tiles" && model.setBy.length > 0 )
+      key.push( { kind: "set", text: (model.setBy.length > 1) ? "tiles that set the reading" : "tile that sets the reading" } );
+   if ( model.region != null )
+      key.push( { kind: "set", text: "your region" } );
+   key.push( { kind: "ramp", text: "darkest to brightest tile" } );
+   if ( model.leftOut > 0 )
+      key.push( { kind: "out", text: "too bright, left out" } );
+   var sample = 3*pad, numberW = font.width( "8888.8" ) + pad, panelW = 0;
+   for ( i = 0; i < facts.length; ++i )
+      panelW = Math.max( panelW, font.width( facts[i][0] ) + (facts[i][1] != "" ? numberW : 0) );
+   for ( i = 0; i < key.length; ++i )
+      panelW = Math.max( panelW, sample + pad + font.width( key[i].text ) );
+
+   // ---- geometry: the map keeps the shape of the frame ---------------------
+   var panel = width - panelW - 4*pad >= 30*pad;
+   var left = pad, top = pad;
+   var availW = (panel ? width - panelW - 3*pad : width - pad) - left, availH = height - pad - top;
+   g.font = font;
+   g.antialiasing = true;
+   g.fillRect( 0, 0, width, height, new Brush( BG ) );
+   if ( availW < 12*pad || availH < 8*pad )
+      return; // too small to draw anything useful
+   var aspect = model.width/model.height;
+   var mapW = Math.min( availW, availH*aspect ), mapH = mapW/aspect;
+   function X( tile ) { return left + Math.round( tile*mapW/model.nx ); }
+   function Y( tile ) { return top + Math.round( tile*mapH/model.ny ); }
+
+   // ---- the tiles ----------------------------------------------------------
+   // Each tile carries its value when that fits: with one decimal, else as a
+   // whole number, else not at all.
+   var cellW = mapW/model.nx, cellH = mapH/model.ny, k;
+   var widest = 0, widestWhole = 0;
+   for ( k = 0; k < model.values.length; ++k )
+      if ( isFinite( model.values[k] ) )
+      {
+         widest = Math.max( widest, font.width( adu( model.values[k] ) ) );
+         widestWhole = Math.max( widestWhole, font.width( secFmt( model.values[k], 0 ) ) );
+      }
+   var decimals = cellW >= widest + 4, numbers = cellH >= textH + 2 && (decimals || cellW >= widestWhole + 4);
+   for ( j = 0; j < model.ny; ++j )
+      for ( i = 0; i < model.nx; ++i )
+      {
+         k = j*model.nx + i;
+         var rank = model.rank[k];
+         g.fillRect( X( i ), Y( j ), X( i + 1 ), Y( j + 1 ), new Brush( isFinite( rank ) ? secMapShade( rank ) : OUT ) );
+         if ( numbers && isFinite( rank ) )
+            text( 0.5*(X( i ) + X( i + 1 )), 0.5*(Y( j ) + Y( j + 1 )),
+                  decimals ? adu( model.values[k] ) : secFmt( model.values[k], 0 ), "c",
+                  (rank > 0.62) ? DARKTEXT : TEXT );
+      }
+   // thin lines between the tiles
+   g.pen = new Pen( BG, 1 );
+   for ( i = 1; i < model.nx; ++i )
+      g.drawLine( X( i ), top, X( i ), top + Math.round( mapH ) );
+   for ( j = 1; j < model.ny; ++j )
+      g.drawLine( left, Y( j ), left + Math.round( mapW ), Y( j ) );
+   outline( left, top, left + Math.round( mapW ), top + Math.round( mapH ), AXIS, 1 );
+
+   // the tiles that set the reading
+   for ( i = 0; i < model.setBy.length; ++i )
+   {
+      var sx = model.setBy[i] % model.nx, sy = Math.floor( model.setBy[i]/model.nx );
+      outline( X( sx ) + 1, Y( sy ) + 1, X( sx + 1 ) - 1, Y( sy + 1 ) - 1, ACCENT, 2*scale );
+   }
+   // the user's own region, at its place in the frame
+   if ( model.region != null )
+      outline( left + Math.round( model.region.x0*mapW/model.width ), top + Math.round( model.region.y0*mapH/model.height ),
+               left + Math.round( model.region.x1*mapW/model.width ), top + Math.round( model.region.y1*mapH/model.height ),
+               ACCENT, 2*scale );
+
+   // ---- side panel ---------------------------------------------------------
+   if ( !panel )
+      return;
+   var px = width - panelW - pad, py = top;
+   for ( i = 0; i < facts.length && py + rowH <= height - pad; ++i )
+   {
+      y = Math.round( py + 0.5*rowH );
+      text( px, y, facts[i][0], "l", (i == 0) ? TEXT : DIM );
+      if ( facts[i][1] != "" )
+         text( px + panelW, y, facts[i][1], "r", (i == 1) ? ACCENT : TEXT );
+      py += rowH;
+   }
+   py += Math.round( 0.75*rowH );
+   for ( i = 0; i < key.length && py + rowH <= height - pad; ++i )
+   {
+      y = Math.round( py + 0.5*rowH );
+      var boxTop = y - Math.round( 0.4*textH ), boxBottom = y + Math.round( 0.4*textH );
+      if ( key[i].kind == "ramp" )
+      {
+         var steps = 12;
+         for ( j = 0; j < steps; ++j )
+            g.fillRect( px + Math.round( j*sample/steps ), boxTop, px + Math.round( (j + 1)*sample/steps ), boxBottom,
+                        new Brush( secMapShade( j/(steps - 1) ) ) );
+      }
+      else if ( key[i].kind == "out" )
+         g.fillRect( px, boxTop, px + sample, boxBottom, new Brush( OUT ) );
+      else
+         outline( px + 1, boxTop, px + sample - 1, boxBottom, ACCENT, 2*scale );
+      text( px + sample + pad, y, key[i].text, "l", DIM );
+      py += rowH;
+   }
+}
+
+function SecMapDialog( results )
+{
+   this.__base__ = Dialog;
+   this.__base__();
+   var self = this;
+   this.windowTitle = SEC_TITLE + ": sky background map";
+   this.userResizable = true;
+   this.results = results;
+   this.frameIndex = 0;
+   this.channelIndex = 0;
+   this.model = secMapModel( results, 0, 0 );
+
+   this.frame = new ComboBox( this );
+   for ( var i = 0; i < results.frames.length; ++i )
+      this.frame.addItem( results.frames[i].name );
+   this.frame.onItemSelected = function( index ) { self.select( index, self.channelIndex ); };
+   this.channel = new ComboBox( this );
+   var names = results.camera.layout.names;
+   for ( var c = 0; c < names.length; ++c )
+      this.channel.addItem( (names.length > 1) ? "Channel " + names[c] : "Mono" );
+   this.channel.onItemSelected = function( index ) { self.select( self.frameIndex, index ); };
+   var frameLabel = new Label( this );
+   frameLabel.text = "Frame:";
+   frameLabel.textAlignment = TextAlign_Right | TextAlign_VertCenter;
+   var chooser = new HorizontalSizer;
+   chooser.spacing = 6;
+   chooser.add( frameLabel );
+   chooser.add( this.frame, 100 );
+   chooser.add( this.channel );
+
+   this.plot = new Control( this );
+   this.plot.setScaledMinSize( 900, 480 );
+   var plot = this.plot, reported = false;
+   this.plot.onPaint = function()
+   {
+      var g = new Graphics( plot );
+      try
+      {
+         secPaintMap( g, plot.width, plot.height, plot.font, plot.displayPixelRatio, self.model );
+      }
+      catch ( e )
+      {
+         if ( !reported )
+            console.warningln( "The map could not be drawn: " + e );
+         reported = true;
+      }
+      g.end();
+   };
+
+   this.note = new Label( this );
+   this.note.frameStyle = FrameStyle_Box;
+   this.note.margin = 6;
+   this.note.wordWrapping = true;
+   this.note.useRichText = true;
+
+   this.select = function( frameIndex, channelIndex )
+   {
+      self.frameIndex = frameIndex;
+      self.channelIndex = channelIndex;
+      var m = secMapModel( results, frameIndex, channelIndex );
+      var where = m.colour ? " in channel " + m.channelName : "";
+      var html = "<p>The frame is cut into " + m.nx + " x " + m.ny + " tiles. Each number is the median of a " +
+         "tile in ADU above the bias level, and the shade runs from the darkest tile to the brightest. ";
+      if ( m.mode == "tiles" )
+         html += "The background is the 20th percentile of these medians: <b>" + secFmt( m.used, 1 ) +
+            " ADU</b> above bias" + where + ", set by the outlined " + ((m.setBy.length > 1) ? "tiles" : "tile") + ".";
+      else if ( m.mode == "region" )
+         html += "Your own region, outlined, gave <b>" + secFmt( m.used, 1 ) + " ADU</b> above bias" + where +
+            ". The darkest-tiles method would have read " + secFmt( m.tilesWouldRead, 1 ) + ".";
+      else
+         html += "The median of the whole frame was used: <b>" + secFmt( m.used, 1 ) + " ADU</b> above bias" +
+            where + ". The darkest-tiles method would have read " + secFmt( m.tilesWouldRead, 1 ) + ".";
+      html += "</p><p>A raw frame is darker towards the corners because of vignetting, so the darkest tiles " +
+         "tend to lie along the edges. That is the camera and telescope, not a darker sky.</p>";
+      self.note.text = html;
+      self.model = m;
+      plot.update();
+   };
+
+   this.closeButton = new PushButton( this );
+   this.closeButton.text = "Close";
+   this.closeButton.onClick = function() { self.ok(); };
+   var buttons = new HorizontalSizer;
+   buttons.addStretch();
+   buttons.add( this.closeButton );
+
+   this.sizer = new VerticalSizer;
+   this.sizer.margin = 8;
+   this.sizer.spacing = 6;
+   this.sizer.add( chooser );
+   this.sizer.add( this.plot, 100 );
+   this.sizer.add( this.note );
+   this.sizer.add( buttons );
+   this.select( 0, 0 );
+   this.adjustToContents();
+}
+SecMapDialog.prototype = new Dialog;
 
 // ============================================================================
 // Main dialog
@@ -3041,6 +3402,17 @@ function SecDialog()
          (new SecGraphDialog( self.results )).execute();
    };
 
+   this.mapButton = new PushButton( this );
+   this.mapButton.text = "Map...";
+   this.mapButton.toolTip = "Shows the sky background across each light frame, tile by tile, with the " +
+      "tiles that set the background or the region you chose.";
+   this.mapButton.enabled = false;
+   this.mapButton.onClick = function()
+   {
+      if ( self.results != null && self.results.frames.length > 0 )
+         (new SecMapDialog( self.results )).execute();
+   };
+
    this.csvButton = new PushButton( this );
    this.csvButton.text = "Save CSV...";
    this.csvButton.enabled = false;
@@ -3071,6 +3443,7 @@ function SecDialog()
    buttons.addStretch();
    buttons.add( this.calcButton );
    buttons.add( this.graphButton );
+   buttons.add( this.mapButton );
    buttons.add( this.csvButton );
    buttons.add( this.closeButton );
 
@@ -3106,7 +3479,7 @@ function SecDialog()
    this.clearResults = function()
    {
       self.results = null;
-      self.csvButton.enabled = self.graphButton.enabled = false;
+      self.csvButton.enabled = self.graphButton.enabled = self.mapButton.enabled = false;
       self.resultsTree.clear();
    };
 
@@ -3297,6 +3670,7 @@ function SecDialog()
       self.results = r;
       self.csvButton.enabled = true;
       self.graphButton.enabled = r.suggestions.length > 0;
+      self.mapButton.enabled = r.frames.length > 0;
       secConsoleReport( r );
       self.showResults( r );
    };
@@ -3356,7 +3730,8 @@ function SecDialog()
          for ( var j = 0; j < f.channels.length; ++j )
          {
             var c = f.channels[j];
-            var row = [(j == 0) ? f.name : "", f.filter, f.exposure, c.name, secFmt( c.skyADU, 1 ),
+            // the full name is in the console, the CSV and the Map window
+            var row = [(j == 0) ? secShortName( f.name, 36 ) : "", f.filter, f.exposure, c.name, secFmt( c.skyADU, 1 ),
                secFmt( c.skyE, 2 ), secFmt( c.rate, 4 ), secFmt( c.m, 1 ),
                isFinite( c.efficiency ) ? secFmt( 100*c.efficiency, 1 ) + "%" : "n/a"];
             for ( k = 0; k < r.targets.length; ++k )

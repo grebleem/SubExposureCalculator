@@ -91,6 +91,8 @@ A colour camera takes one exposure for red, green and blue together. The channel
 
 The **Graph...** button plots efficiency against sub length, one curve per channel, with the suggested range, the exposure of your frames and your target multiples marked, and a table of each channel's efficiency at both ends.
 
+The **Map...** button shows the sky background across a light frame, tile by tile: each tile with its level in ADU above bias, shaded from the darkest to the brightest. The tile that set the background is outlined, or your own preview rectangle when you chose one. It shows where the nebula lies, how much the corners darken, and what the reading rests on.
+
 The suggestion is calculated from your frames and your chosen multiple. It is not an optimum, and it holds for the sky as it was when the frames were taken.
 
 ### The table

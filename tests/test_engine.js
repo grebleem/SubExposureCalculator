@@ -342,6 +342,22 @@ function runCase( engine, title, camera, options )
       console.log( "   bias and flat frames read again: no (the loader would have refused)" );
       console.log( "   sky rates and noise checks identical to the one-step run: " + (same ? "yes" : "NO") );
 
+      // The tiles that set the darkest-tiles reading have to lie on plain sky.
+      // The simulated nebula doubles the sky over the left third of the frame.
+      var grid = result.frames[0].tiles, outside = true, where = [];
+      for ( var gc = 0; gc < names.length; ++gc )
+         for ( var gs = 0; gs < grid.setBy[gc].length; ++gs )
+         {
+            var col = grid.setBy[gc][gs] % grid.nx, row = Math.floor( grid.setBy[gc][gs]/grid.nx );
+            where.push( names[gc] + " column " + col + " row " + row );
+            if ( col*W/grid.nx < 0.33*W )
+               outside = false;
+         }
+      console.log( "" );
+      console.log( "-- the tiles behind the darkest-tiles reading (first light frame, " + grid.nx + " x " + grid.ny + " tiles) --" );
+      console.log( "   set by: " + where.join( "; " ) );
+      console.log( "   all of them outside the simulated nebula (columns 0 to " + (Math.ceil( 0.33*grid.nx ) - 1) + "): " + (outside ? "yes" : "NO") );
+
       // A background region chosen by hand. The simulated nebula doubles the
       // sky over the left third of the frame.
       console.log( "" );

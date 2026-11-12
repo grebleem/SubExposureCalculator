@@ -7,7 +7,7 @@
       </p>
    </description>
    <platform os="all" arch="noarch" version="1.8.8:9.9.9">
-      <package fileName="SubExposureCalculator-1.0.2-20261112.zip" sha1="3303a7ead2cbcbfa8883acc3854813111bae0632" type="script" releaseDate="20261112">
+      <package fileName="SubExposureCalculator-1.0.2-20261112.zip" sha1="3abf2737ec295c1ccc3fbb5160f0c43c3474451b" type="script" releaseDate="20261112">
          <title>
             SubExposureCalculator script version 1.0.2
          </title>
